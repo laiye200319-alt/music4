@@ -1013,7 +1013,10 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
       // 发送输入源选择指令到设备
       print('Selecting input source: $source');
       // 这里需要根据实际蓝牙协议发送相应的指令
-      // await _bluetoothService.sendInputSourceCommand(source);
+      int sourceIndex = inputSources.indexOf(source);
+      if (sourceIndex != -1) {
+        await _bluetoothService.sendInputSourceCommand(sourceIndex);
+      }
 
       // 根据输入源切换UI逻辑
       if (source == 'FM') {
@@ -1208,7 +1211,8 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
     try {
       print('Selecting X.BASS: $xbass');
       // 根据实际蓝牙协议发送相应的指令
-      // await _bluetoothService.sendXBassCommand(xbass);
+      int xbassValue = int.tryParse(xbass) ?? 1;
+      await _bluetoothService.sendXBassCommand(xbassValue);
       _showSuccess('X.BASS set to $xbass');
     } catch (e) {
       print('Failed to send X.BASS command: $e');
@@ -1230,8 +1234,14 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
     try {
       print('Selecting effect mode: $mode');
       // 根据实际蓝牙协议发送相应的指令
-      // await _bluetoothService.sendEffectModeCommand(mode);
-      _showSuccess('Effect mode set to $mode');
+      int modeIndex = effectModes.indexOf(mode);
+      if (modeIndex != -1) {
+        await _bluetoothService.sendEffectModeCommand(modeIndex);
+        _showSuccess('Effect mode set to $mode');
+      } else {
+        print('Unknown effect mode: $mode');
+        _showError('Unknown effect mode');
+      }
     } catch (e) {
       print('Failed to send effect mode command: $e');
       _showError('Failed to set effect mode');

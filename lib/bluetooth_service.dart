@@ -597,8 +597,61 @@ class AmpBluetoothService {
     }
   }
 
+  // 发送输入源切换指令 - 使用AE30协议的0x30指令码
+  Future<void> sendInputSourceCommand(int source) async {
+    print('发送输入源切换指令: $source');
+
+    // 构造指令包 - 无Data Length字段，符合AE30协议规范
+    final List<int> packet = [
+      0xBE, // 包头
+      0x30, // 输入源切换指令
+      source, // 输入源值 (0=FM, 1=AUX, 2=USB/SD, 3=BT)
+      0x00, // 校验位（临时）
+    ];
+
+    // 计算校验和：Command + Data
+    int checksum = packet[1] + packet[2];
+    packet[3] = checksum & 0xFF;
+
+    print('输入源切换指令包: $packet');
+    await sendCommand(packet, maxRetries: 3);
+  }
+
+  // 发送X.BASS控制指令 - 使用AE30协议的0x06指令码
+  Future<void> sendXBassCommand(int xbass) async {
+    print('发送X.BASS控制指令: $xbass');
+
+    // 构造指令包 - 无Data Length字段，符合AE30协议规范
+    final List<int> packet = [
+      0xBE, // 包头
+      0x06, // X.BASS指令
+      xbass, // X.BASS值 (1, 2, 3)
+      0x00, // 校验位（临时）
+    ];
+
+    // 计算校验和：Command + Data
+    int checksum = packet[1] + packet[2];
+    packet[3] = checksum & 0xFF;
+
+    print('X.BASS指令包: $packet');
+    await sendCommand(packet, maxRetries: 3);
+  }
+
+  // 发送播放/暂停指令 - 使用AE30协议的0x31指令码，无数据无校验和
+  Future<void> sendPlayPauseCommand() async {
+    print('发送播放/暂停指令');
+
+    // 构造指令包 - 无数据指令，不包含校验和
+    final List<int> packet = [
+      0xBE, // 包头
+      0x31, // 播放/暂停指令
+    ];
+
+    print('播放/暂停指令包: $packet');
+    await sendCommand(packet, maxRetries: 3);
+  }
+
   // 假设这是一个用于请求设备所有当前状态的命令
-  // **根据您的设备通信协议替换为实际的字节数组**
   static const List<int> _READ_ALL_STATE_COMMAND = [0xBE, 0x00, 0x00, 0x00];
 
   /// 向设备发送请求初始状态的命令
