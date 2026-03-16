@@ -423,19 +423,18 @@ class AmpBluetoothService {
       _lastVolume = volume;
     }
 
-    // 构造指令包
+    // 构造指令包 - 移除Data Length字段，符合AE30协议规范
     final List<int> packet = [
       0xBE, // 包头
       0x01, // 音量指令
-      0x01, // 数据长度
       volume, // 音量值
       0x00, // 校验位（临时）
     ];
 
     // 计算校验和：指令+长度+数据
-    int checksum = packet[1] + packet[2] + packet[3];
-    packet[4] = checksum & 0xFF;
-
+    // 计算校验和：Command + Data
+    int checksum = packet[1] + packet[2];
+    packet[3] = checksum & 0xFF;
     print('音量指令包: $packet');
     print(
       '十六进制: ${packet.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ')}',
