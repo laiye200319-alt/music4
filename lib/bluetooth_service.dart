@@ -29,9 +29,9 @@ class AmpBluetoothService {
   StreamSubscription<BluetoothAdapterState>? _adapterStateSubscription;
 
   // 定义服务UUID
-  final String serviceUuid = "0000ab00-0000-1000-8000-00805f9b34fb";
-  final String writeCharUuid = "0000ab01-0000-1000-8000-00805f9b34fb";
-  final String readCharUuid = "0000ab02-0000-1000-8000-00805f9b34fb";
+  final String serviceUuid = "0000ae30-0000-1000-8000-00805f9b34fb";
+  final String writeCharUuid = "0000ae01-0000-1000-8000-00805f9b34fb";
+  final String readCharUuid = "0000ae02-0000-1000-8000-00805f9b34fb";
 
   // 上次音量值
   int _lastVolume = 16;
@@ -431,10 +431,10 @@ class AmpBluetoothService {
       0x00, // 校验位（临时）
     ];
 
-    // 计算校验和：指令+长度+数据
-    // 计算校验和：Command + Data
-    int checksum = packet[1] + packet[2];
+    // 计算校验和：Header + Command + Data
+    int checksum = packet[0] + packet[1] + packet[2];
     packet[3] = checksum & 0xFF;
+
     print('音量指令包: $packet');
     print(
       '十六进制: ${packet.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ')}',
@@ -651,7 +651,7 @@ class AmpBluetoothService {
   }
 
   // 假设这是一个用于请求设备所有当前状态的命令
-  static const List<int> _READ_ALL_STATE_COMMAND = [0xBE, 0x00, 0x00, 0x00];
+  static const List<int> _READ_ALL_STATE_COMMAND = [0xBE, 0x00, 0xBE];
 
   /// 向设备发送请求初始状态的命令
   Future<void> _requestInitialDeviceState() async {
@@ -694,43 +694,42 @@ class AmpBluetoothService {
     }
 
     int command = data[1];
-    int dataLength = data[2];
-
-    print('指令: 0x${command.toRadixString(16)}, 数据长度: $dataLength');
-
-    // 【新增/修改的解析逻辑】
-    // 重要：根据蓝牙协议来修改这里的解析逻辑
+    print('指令: 0x${command.toRadixString(16)}');
 
     // 当命令类型为 0x00 (Sync) 且数据长度足够时，是一个完整的状态包
-    if (command == 0x00 && data.length >= 6) {
-      // 假设：
-      // data[3] 是 volume 值 (例如 0-32)
-      // data[4] 是 effect 值 (例如 0-32)
-      // data[5] 是 sound effects 值 (例如 0-8)
-      final int volume = data[3];
-      final int effect = data[4];
-      final int soundEffects = data[5];
+    // 设备返回格式: BE 00 Volume MusicVB 3D MusicEQ MicVolume MicEQ Checksum
+    if (command == 0x00 && data.length >= 9) {
+      // 直接按字段位置解析，不假设Data Length
+      final int volume = data[2];
+      final int musicVB = data[3]; // 播放状态
+      final int effect3d = data[4];
+      final int musicEQ = data[5];
+      final int micVolume = data[6];
+      final int micEQ = data[7];
 
       final Map<String, dynamic> newState = {
         'volume': volume,
-        'effect': effect,
-        'effectMode': soundEffects,
+        'effect': effect3d,
+        'effectMode': musicEQ,
+        'micVolume': micVolume,
+        'micEQ': micEQ,
+        'isPlaying': musicVB == 1, // 假设1表示播放，0表示暂停
         'timestamp': DateTime.now().millisecondsSinceEpoch,
         'type': 'initialState',
         'source': 'device',
         'rawData': data,
-        'rawBytes': data
-            .map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}')
-            .join(', '),
       };
 
+      print('解析设备状态: $newState');
+      
       // 将解析后的状态推送到流中，供控制页更新 UI
       if (!_deviceStateController.isClosed) {
         _deviceStateController.add(newState);
       }
-      // 打印解析出的 sound effects 值
+      
+      // 打印解析出的状态值
       print(
-        '✅ Full state parsed and updated. Sound Effects Value: $soundEffects',
+        '✅ Full state parsed and updated. Volume: $volume, Effect: $effect3d, Effect Mode: $musicEQ, Mic Volume: $micVolume, Mic EQ: $micEQ, Is Playing: ${musicVB == 1}',
       );
     } else {
       // 处理其他类型的指令
@@ -739,22 +738,22 @@ class AmpBluetoothService {
       );
       switch (command) {
         case 0x00: // Sync指令
-          _handleSyncCommand(data, dataLength);
+          _handleSyncCommand(data, 0); // 不再使用dataLength
           break;
         case 0x02: // 音效强度响应（新增）
-          _handleEffectResponse(data, dataLength);
+          _handleEffectResponse(data, 0); // 不再使用dataLength
           break;
         case 0x05: // 状态响应
-          _handleStateResponse(data, dataLength);
+          _handleStateResponse(data, 0); // 不再使用dataLength
           break;
         case 0x06: // 音量变化通知
-          _handleVolumeChange(data, dataLength);
+          _handleVolumeChange(data, 0); // 不再使用dataLength
           break;
         case 0x07: // 效果变化通知
-          _handleEffectChange(data, dataLength);
+          _handleEffectChange(data, 0); // 不再使用dataLength
           break;
         case 0x08: // 音效模式变化通知
-          _handleEffectModeChange(data, dataLength);
+          _handleEffectModeChange(data, 0); // 不再使用dataLength
           break;
         default:
           print('ℹ️ 收到未知指令类型: 0x${command.toRadixString(16)}');
@@ -769,32 +768,40 @@ class AmpBluetoothService {
     print('数据长度: ${data.length}');
 
     // 更宽松的长度检查
-    if (data.length < 6) {
-      print('⚠️ Sync指令数据长度不足，尝试解析: ${data.length}');
-      // 不返回，尝试解析可用数据
+    if (data.length < 9) {
+      print('⚠️ Sync指令数据长度不足，无法解析: ${data.length}');
+      return;
     }
 
     try {
-      // 更健壮的数据提取
-      int volume = data.length > 3 ? data[3] : 0;
-      int effect = data.length > 4 ? data[4] : 0;
-      int soundEffect = data.length > 5 ? data[5] : 0;
+      // 直接按字段位置解析
+      int volume = data[2];
+      int musicVB = data[3];
+      int effect3d = data[4];
+      int musicEQ = data[5];
+      int micVolume = data[6];
+      int micEQ = data[7];
 
       // 数据验证
       volume = volume.clamp(0, 32);
-      effect = effect.clamp(0, 32);
-      soundEffect = soundEffect.clamp(0, 8);
+      effect3d = effect3d.clamp(0, 32);
+      musicEQ = musicEQ.clamp(0, 8);
+      micVolume = micVolume.clamp(0, 32);
+      micEQ = micEQ.clamp(0, 8);
 
-      print('🔄 设备主动同步 - 音量: $volume, 效果: $effect, 音效模式: $soundEffect');
+      print('🔄 设备主动同步 - 音量: $volume, 3D效果: $effect3d, 音效模式: $musicEQ, 麦克风音量: $micVolume, 麦克风EQ: $micEQ, 播放状态: ${musicVB == 1 ? '播放' : '暂停'}');
 
       Map<String, dynamic> state = {
         'volume': volume,
-        'effect': effect,
-        'effectMode': soundEffect,
+        'effect': effect3d,
+        'effectMode': musicEQ,
+        'micVolume': micVolume,
+        'micEQ': micEQ,
+        'isPlaying': musicVB == 1,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
         'type': 'sync',
-        'source': 'device', // 标记来自设备
-        'rawData': data, // 添加原始数据
+        'source': 'device',
+        'rawData': data,
       };
 
       if (!_deviceStateController.isClosed) {
