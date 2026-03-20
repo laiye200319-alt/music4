@@ -28,7 +28,7 @@ class AmpBluetoothService {
   // 添加蓝牙适配器状态监听器
   StreamSubscription<BluetoothAdapterState>? _adapterStateSubscription;
 
-  // 定义服务UUID
+  // 定义服务UUID - 修正为正确的AE30协议UUID
   final String serviceUuid = "0000ae30-0000-1000-8000-00805f9b34fb";
   final String writeCharUuid = "0000ae01-0000-1000-8000-00805f9b34fb";
   final String readCharUuid = "0000ae02-0000-1000-8000-00805f9b34fb";
@@ -53,7 +53,9 @@ class AmpBluetoothService {
 
   // 连接设备 - 完全重写版本
   Future<void> connectToDevice(BluetoothDevice device) async {
+    final DateTime startTime = DateTime.now();
     print('=== Connecting to device ===');
+    print('🕒 连接开始时间: ${startTime.toIso8601String()}');
     print('Device name: ${device.name}');
     print('Device ID: ${device.id}');
 
@@ -61,16 +63,12 @@ class AmpBluetoothService {
       // 取消之前的监听
       _deviceStateSubscription?.cancel();
 
-      // 🚨 关键修复：优化连接参数
-      print('🔧 配置连接参数...');
-      await device.connect(
-        timeout: const Duration(seconds: 45), // 延长连接超时时间
-        autoConnect: false, // 禁用自动连接，避免冲突
-        mtu: 512, // 设置合适的MTU大小
-      );
-
+      // 连接设备
+      await device.connect(timeout: const Duration(seconds: 30));
       connectedDevice = device;
+      final DateTime connectTime = DateTime.now();
       print('✅ Connected to device: ${device.name}');
+      print('🕒 物理连接完成时间: ${connectTime.toIso8601String()} (耗时: ${connectTime.difference(startTime).inMilliseconds}ms)');
 
       // 保存设备信息
       await saveConnectedDevice(device);
@@ -78,87 +76,42 @@ class AmpBluetoothService {
       // 开始监听设备连接状态变化
       _startDeviceStateListener(device);
 
-      // 🚨 关键修复：添加服务发现重试机制
+      // 发现服务
       print('开始发现服务...');
-      List<BluetoothService> services = [];
-      int serviceDiscoveryAttempts = 0;
-
-      while (services.isEmpty && serviceDiscoveryAttempts < 3) {
-        try {
-          services = await device.discoverServices();
-          if (services.isEmpty) {
-            serviceDiscoveryAttempts++;
-            print('⚠️ 服务发现为空，第 $serviceDiscoveryAttempts 次重试...');
-            await Future.delayed(Duration(seconds: 2));
-          }
-        } catch (e) {
-          serviceDiscoveryAttempts++;
-          print('❌ 服务发现失败，第 $serviceDiscoveryAttempts 次重试: $e');
-          await Future.delayed(Duration(seconds: 2));
-        }
-      }
-
+      List<BluetoothService> services = await device.discoverServices();
       print('发现 ${services.length} 个服务');
-
-      if (services.isEmpty) {
-        throw Exception('无法发现任何服务，请检查设备是否支持蓝牙服务');
-      }
 
       bool foundService = false;
       bool foundWriteChar = false;
       bool foundReadChar = false;
 
-      // 🚨 关键修复：改进服务匹配逻辑
-      print('🔍 开始匹配服务...');
       for (BluetoothService service in services) {
         String serviceUuidLower = service.uuid.toString().toLowerCase();
         print('检查服务: $serviceUuidLower');
 
-        // 更宽松的匹配逻辑，支持多种常见蓝牙服务
-        bool isTargetService =
-            serviceUuidLower == serviceUuid.toLowerCase() ||
-            serviceUuidLower.contains('ab00') ||
-            serviceUuidLower.contains('ffe0') || // 常见服务UUID
-            serviceUuidLower.contains('180a') || // 设备信息服务
-            serviceUuidLower.contains('180f'); // 电池服务
-
+        // 改进服务UUID匹配逻辑 - 使用更可靠的包含检查
+        // 标准AE30协议服务UUID: 0000ae30-0000-1000-8000-00805f9b34fb
+        bool isTargetService = serviceUuidLower.contains('ae30');
+        
         if (isTargetService) {
           foundService = true;
           print('✅ 找到目标服务: ${service.uuid}');
 
-          // 🚨 关键修复：改进特征匹配逻辑
           for (BluetoothCharacteristic characteristic
               in service.characteristics) {
             String charUuid = characteristic.uuid.toString().toLowerCase();
             print('检查特征: $charUuid, 属性: ${characteristic.properties}');
 
-            // 更宽松的特征匹配，支持多种常见特征
-            bool isWriteChar =
-                (charUuid == writeCharUuid.toLowerCase() ||
-                charUuid.contains('ab01') ||
-                charUuid.contains('ffe1') || // 常见写入特征
-                charUuid.contains('2a00') || // 设备名称特征
-                characteristic.properties.write);
-
-            bool isReadChar =
-                (charUuid == readCharUuid.toLowerCase() ||
-                charUuid.contains('ab02') ||
-                charUuid.contains('ffe2') || // 常见通知特征
-                charUuid.contains('2a01') || // 外观特征
-                characteristic.properties.notify ||
-                characteristic.properties.indicate);
-
-            // 检查写入特征
-            if (isWriteChar && characteristic.properties.write) {
+            // 检查写入特征 - AE01
+            if (charUuid.contains('ae01') && 
+                (characteristic.properties.write || characteristic.properties.writeWithoutResponse)) {
               writeCharacteristic = characteristic;
               foundWriteChar = true;
               print('✅ 找到写入特征: ${characteristic.uuid}');
             }
 
-            // 检查通知特征
-            if (isReadChar &&
-                (characteristic.properties.notify ||
-                    characteristic.properties.indicate)) {
+            // 检查通知特征 - AE02  
+            if (charUuid.contains('ae02') && characteristic.properties.notify) {
               readCharacteristic = characteristic;
               foundReadChar = true;
               print('✅ 找到通知特征: ${characteristic.uuid}');
@@ -202,6 +155,24 @@ class AmpBluetoothService {
                 print('⚠️ 启用通知失败: $e');
               }
 
+              // 【新增】启用其他可能的通知特征
+              // 根据第三方工具日志，BK8000可能有多个通知特征
+              for (BluetoothCharacteristic otherChar in service.characteristics) {
+                String otherCharUuid = otherChar.uuid.toString().toLowerCase();
+                if (otherCharUuid != charUuid && 
+                    otherChar.properties.notify &&
+                    (otherCharUuid.contains('ae04') || 
+                     otherCharUuid.contains('ae05') || 
+                     otherCharUuid.contains('ae3c'))) {
+                  try {
+                    await _enableNotificationsWithRetry(otherChar);
+                    print('✅ 启用额外通知特征: ${otherChar.uuid}');
+                  } catch (e) {
+                    print('⚠️ 启用额外通知特征失败: $e');
+                  }
+                }
+              }
+
               // 【新增代码】：在发送状态请求前，等待 500ms
               await Future.delayed(Duration(milliseconds: 500));
 
@@ -212,9 +183,10 @@ class AmpBluetoothService {
         }
       }
 
-      // 🚨 关键修复：改进连接状态判断和错误处理
+      // 更新连接状态
       if (foundService && foundWriteChar) {
         print('✅ 连接完全建立，设备就绪');
+        // 只有在完全成功时才更新连接状态为true
         updateConnectionStatus(true);
 
         // 连接成功后立即读取设备状态
@@ -226,41 +198,108 @@ class AmpBluetoothService {
 
         // 启动连接状态检查定时器
         _startConnectionCheckTimer();
-
-        // 发送连接成功确认
-        await _sendConnectionSuccess();
+        
+        // 【新增】添加时间确认机制 - 验证设备实际通信能力
+        bool deviceResponds = await _verifyDeviceCommunication();
+        if (!deviceResponds) {
+          print('⚠️ 设备连接但无响应，连接可能不完整');
+          // 不抛出异常，但记录警告，让用户知道可能存在风险
+        }
+        
+        final DateTime endTime = DateTime.now();
+        print('🕒 连接完成时间: ${endTime.toIso8601String()} (总耗时: ${endTime.difference(startTime).inMilliseconds}ms)');
       } else {
         print('❌ 服务或特征发现不完整');
         print(
           '找到服务: $foundService, 找到写入特征: $foundWriteChar, 找到读取特征: $foundReadChar',
         );
+        // 确保在失败时明确设置连接状态为false
+        updateConnectionStatus(false);
+        cleanup(); // 清理资源
 
-        // 🚨 关键修复：尝试备用连接策略
-        if (!foundService) {
-          print('⚠️ 未找到目标服务，尝试使用第一个可用服务...');
-          await _tryFallbackConnection(services);
-        } else if (!foundWriteChar) {
-          print('⚠️ 未找到写入特征，尝试使用其他特征...');
-          await _tryAlternativeCharacteristics(services);
-        } else {
-          updateConnectionStatus(false);
-          throw Exception('设备服务不完整，无法建立完整连接');
-        }
+        // 明确抛出异常，通知调用方连接失败
+        throw Exception('Failed to find required Bluetooth services or characteristics. Cannot connect to device.');
       }
     } catch (e) {
       print('❌ 连接失败: $e');
       updateConnectionStatus(false);
+      cleanup(); // 连接失败时清理资源
+      rethrow;
+    }
+  }
 
-      // 🚨 关键修复：更详细的错误信息
-      if (e.toString().contains('timeout')) {
-        throw Exception('连接超时，请检查设备是否在范围内且可被发现');
-      } else if (e.toString().contains('permission')) {
-        throw Exception('蓝牙连接权限被拒绝，请在设置中授予权限');
-      } else if (e.toString().contains('service')) {
-        throw Exception('设备服务发现失败，请确认设备支持蓝牙服务');
+  // 【新增方法】验证设备实际通信能力
+  Future<bool> _verifyDeviceCommunication() async {
+    print('🔍 验证设备实际通信能力...');
+    
+    if (writeCharacteristic == null) {
+      print('❌ 写入特征不可用，无法验证通信');
+      return false;
+    }
+    
+    try {
+      // 发送一个简单的状态请求指令来验证通信
+      // 使用输入源查询指令 [0xBE, 0x31, 0x00] - 查询当前输入源
+      List<int> testCommand = [0xBE, 0x31, 0x00];
+      print('📤 发送测试指令: ${testCommand.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ')}');
+      
+      // 创建Completer来等待响应
+      Completer<bool> responseCompleter = Completer<bool>();
+      
+      // 设置超时
+      Timer? timeoutTimer;
+      StreamSubscription<List<int>>? responseSubscription;
+      
+      // 监听设备响应
+      responseSubscription = readCharacteristic?.value.listen((value) {
+        if (value.isNotEmpty && value.length >= 3) {
+          // 检查是否是有效的状态响应
+          if (value[0] == 0xBE && (value[1] == 0x31 || value[1] == 0x30)) {
+            print('✅ 收到设备有效响应，通信验证成功');
+            responseCompleter.complete(true);
+            timeoutTimer?.cancel();
+            responseSubscription?.cancel();
+          }
+        }
+      });
+      
+      // 设置5秒超时
+      timeoutTimer = Timer(Duration(seconds: 5), () {
+        print('⏰ 设备通信验证超时');
+        responseCompleter.complete(false);
+        responseSubscription?.cancel();
+      });
+      
+      // 发送测试指令
+      bool useWithoutResponse = writeCharacteristic!.properties.writeWithoutResponse;
+      bool useWithResponse = writeCharacteristic!.properties.write;
+      
+      if (useWithoutResponse) {
+        await writeCharacteristic!.write(testCommand, withoutResponse: true);
+      } else if (useWithResponse) {
+        await writeCharacteristic!.write(testCommand, withoutResponse: false);
       } else {
-        throw Exception('连接失败: $e');
+        throw Exception('特征不支持写入');
       }
+      
+      // 等待响应或超时
+      bool deviceResponded = await responseCompleter.future;
+      
+      // 清理
+      timeoutTimer?.cancel();
+      responseSubscription?.cancel();
+      
+      if (deviceResponded) {
+        print('✅ 设备通信验证成功，连接确认有效');
+      } else {
+        print('⚠️ 设备通信验证失败，连接可能存在问题');
+      }
+      
+      return deviceResponded;
+      
+    } catch (e) {
+      print('❌ 设备通信验证异常: $e');
+      return false;
     }
   }
 
@@ -378,16 +417,47 @@ class AmpBluetoothService {
           throw Exception('设备在发送前断开连接');
         }
 
-        // 根据特征属性选择写入方式
-        if (writeCharacteristic!.properties.write) {
+        // 【修复】添加写入模式自动检测和回退机制
+        // 根据特征属性自动选择写入模式
+        bool useWithoutResponse = writeCharacteristic!.properties.writeWithoutResponse;
+        bool useWithResponse = writeCharacteristic!.properties.write;
+        
+        print('特征写入属性 - Write: $useWithResponse, WriteWithoutResponse: $useWithoutResponse');
+        
+        // 优先使用WriteWithoutResponse（如果支持），否则使用Write
+        bool writeSuccess = false;
+        String writeModeUsed = '';
+        
+        if (useWithoutResponse) {
+          try {
+            await writeCharacteristic!.write(command, withoutResponse: true);
+            writeSuccess = true;
+            writeModeUsed = 'withoutResponse';
+          } catch (e) {
+            print('⚠️ WriteWithoutResponse 失败: $e');
+            // 尝试回退到Write模式
+            if (useWithResponse) {
+              try {
+                await writeCharacteristic!.write(command, withoutResponse: false);
+                writeSuccess = true;
+                writeModeUsed = 'withResponse';
+              } catch (e2) {
+                print('❌ WriteWithResponse 也失败: $e2');
+                rethrow;
+              }
+            } else {
+              rethrow;
+            }
+          }
+        } else if (useWithResponse) {
           await writeCharacteristic!.write(command, withoutResponse: false);
-        } else if (writeCharacteristic!.properties.writeWithoutResponse) {
-          await writeCharacteristic!.write(command, withoutResponse: true);
+          writeSuccess = true;
+          writeModeUsed = 'withResponse';
         } else {
-          throw Exception('特征不支持写入操作');
+          throw Exception('特征不支持任何写入模式');
         }
 
-        print('✅ 指令发送成功');
+        print('✅ 指令发送成功 (使用模式: $writeModeUsed)');
         return;
       } catch (e, stackTrace) {
         print('❌ 发送指令失败 (尝试 $attempts/$maxRetries): $e');
@@ -423,17 +493,12 @@ class AmpBluetoothService {
       _lastVolume = volume;
     }
 
-    // 构造指令包 - 移除Data Length字段，符合AE30协议规范
+    // 构造指令包 - 使用标准三字节格式，移除校验和
     final List<int> packet = [
       0xBE, // 包头
-      0x01, // 音量指令
+      0x31, // 音量指令 (根据AE30协议)
       volume, // 音量值
-      0x00, // 校验位（临时）
     ];
-
-    // 计算校验和：Header + Command + Data
-    int checksum = packet[0] + packet[1] + packet[2];
-    packet[3] = checksum & 0xFF;
 
     print('音量指令包: $packet');
     print(
@@ -489,54 +554,6 @@ class AmpBluetoothService {
     packet[packet.length - 1] = checksum & 0xFF;
 
     print('音效模式指令包: $packet');
-    await sendCommand(packet, maxRetries: 3);
-  }
-
-  // 发送播放命令
-  Future<void> sendPlayCommand() async {
-    print('=== 发送播放命令 ===');
-
-    // 构造播放指令包
-    final List<int> packet = [
-      0xBE, // 包头
-      0x04, // 播放指令
-      0x01, // 数据长度
-      0x01, // 播放命令值
-      0x00, // 校验位（临时）
-    ];
-
-    // 计算校验和
-    int checksum = 0;
-    for (int i = 1; i < packet.length - 1; i++) {
-      checksum += packet[i];
-    }
-    packet[packet.length - 1] = checksum & 0xFF;
-
-    print('播放指令包: $packet');
-    await sendCommand(packet, maxRetries: 3);
-  }
-
-  // 发送暂停命令
-  Future<void> sendPauseCommand() async {
-    print('=== 发送暂停命令 ===');
-
-    // 构造暂停指令包
-    final List<int> packet = [
-      0xBE, // 包头
-      0x04, // 播放控制指令
-      0x01, // 数据长度
-      0x00, // 暂停命令值
-      0x00, // 校验位（临时）
-    ];
-
-    // 计算校验和
-    int checksum = 0;
-    for (int i = 1; i < packet.length - 1; i++) {
-      checksum += packet[i];
-    }
-    packet[packet.length - 1] = checksum & 0xFF;
-
-    print('暂停指令包: $packet');
     await sendCommand(packet, maxRetries: 3);
   }
 
@@ -596,62 +613,73 @@ class AmpBluetoothService {
     }
   }
 
-  // 发送输入源切换指令 - 使用AE30协议的0x30指令码
-  Future<void> sendInputSourceCommand(int source) async {
-    print('发送输入源切换指令: $source');
+  // 新增：发送输入源切换指令
+  Future<void> sendInputSourceCommand(String source) async {
+    print('=== 发送输入源切换指令 ===');
+    print('目标输入源: $source');
 
-    // 构造指令包 - 无Data Length字段，符合AE30协议规范
+    int mode;
+    switch (source) {
+      case 'BT':
+        mode = 0x00;
+        break;
+      case 'AUX':
+        mode = 0x01;
+        break;
+      case 'USB/SD':
+        mode = 0x02;
+        break;
+      case 'FM':
+        mode = 0x03;
+        break;
+      default:
+        throw Exception('Invalid input source: $source');
+    }
+    
+    // 构造指令包 - 使用标准三字节格式
     final List<int> packet = [
       0xBE, // 包头
       0x30, // 输入源切换指令
-      source, // 输入源值 (0=FM, 1=AUX, 2=USB/SD, 3=BT)
-      0x00, // 校验位（临时）
+      mode, // 模式值
     ];
-
-    // 计算校验和：Command + Data
-    int checksum = packet[1] + packet[2];
-    packet[3] = checksum & 0xFF;
 
     print('输入源切换指令包: $packet');
+    print(
+      '十六进制: ${packet.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ')}',
+    );
+
     await sendCommand(packet, maxRetries: 3);
+    print('✅ 输入源切换指令发送完成');
   }
 
-  // 发送X.BASS控制指令 - 使用AE30协议的0x06指令码
-  Future<void> sendXBassCommand(int xbass) async {
-    print('发送X.BASS控制指令: $xbass');
+  // 新增：安全的输入源切换序列（先回BT模式，再切目标模式）
+  Future<void> sendSafeInputSourceCommand(String targetSource) async {
+    print('=== 发送安全输入源切换指令 ===');
+    print('目标输入源: $targetSource');
 
-    // 构造指令包 - 无Data Length字段，符合AE30协议规范
-    final List<int> packet = [
-      0xBE, // 包头
-      0x06, // X.BASS指令
-      xbass, // X.BASS值 (1, 2, 3)
-      0x00, // 校验位（临时）
-    ];
+    if (targetSource == 'BT') {
+      // 如果目标就是BT模式，直接切换
+      await sendInputSourceCommand('BT');
+      return;
+    }
 
-    // 计算校验和：Command + Data
-    int checksum = packet[1] + packet[2];
-    packet[3] = checksum & 0xFF;
-
-    print('X.BASS指令包: $packet');
-    await sendCommand(packet, maxRetries: 3);
-  }
-
-  // 发送播放/暂停指令 - 使用AE30协议的0x31指令码，无数据无校验和
-  Future<void> sendPlayPauseCommand() async {
-    print('发送播放/暂停指令');
-
-    // 构造指令包 - 无数据指令，不包含校验和
-    final List<int> packet = [
-      0xBE, // 包头
-      0x31, // 播放/暂停指令
-    ];
-
-    print('播放/暂停指令包: $packet');
-    await sendCommand(packet, maxRetries: 3);
+    // 1. 首先切换到BT模式
+    print('步骤1: 切换到BT模式');
+    await sendInputSourceCommand('BT');
+    
+    // 2. 等待短暂间隔
+    await Future.delayed(Duration(milliseconds: 100));
+    
+    // 3. 再切换到目标模式
+    print('步骤2: 切换到目标模式 $targetSource');
+    await sendInputSourceCommand(targetSource);
+    
+    print('✅ 安全输入源切换完成');
   }
 
   // 假设这是一个用于请求设备所有当前状态的命令
-  static const List<int> _READ_ALL_STATE_COMMAND = [0xBE, 0x00, 0xBE];
+  // **根据您的设备通信协议替换为实际的字节数组**
+  static const List<int> _READ_ALL_STATE_COMMAND = [0xBE, 0x00, 0x00, 0x00];
 
   /// 向设备发送请求初始状态的命令
   Future<void> _requestInitialDeviceState() async {
@@ -694,42 +722,43 @@ class AmpBluetoothService {
     }
 
     int command = data[1];
-    print('指令: 0x${command.toRadixString(16)}');
+    int dataLength = data[2];
+
+    print('指令: 0x${command.toRadixString(16)}, 数据长度: $dataLength');
+
+    // 【新增/修改的解析逻辑】
+    // 重要：根据蓝牙协议来修改这里的解析逻辑
 
     // 当命令类型为 0x00 (Sync) 且数据长度足够时，是一个完整的状态包
-    // 设备返回格式: BE 00 Volume MusicVB 3D MusicEQ MicVolume MicEQ Checksum
-    if (command == 0x00 && data.length >= 9) {
-      // 直接按字段位置解析，不假设Data Length
-      final int volume = data[2];
-      final int musicVB = data[3]; // 播放状态
-      final int effect3d = data[4];
-      final int musicEQ = data[5];
-      final int micVolume = data[6];
-      final int micEQ = data[7];
+    if (command == 0x00 && data.length >= 6) {
+      // 假设：
+      // data[3] 是 volume 值 (例如 0-32)
+      // data[4] 是 effect 值 (例如 0-32)
+      // data[5] 是 sound effects 值 (例如 0-8)
+      final int volume = data[3];
+      final int effect = data[4];
+      final int soundEffects = data[5];
 
       final Map<String, dynamic> newState = {
         'volume': volume,
-        'effect': effect3d,
-        'effectMode': musicEQ,
-        'micVolume': micVolume,
-        'micEQ': micEQ,
-        'isPlaying': musicVB == 1, // 假设1表示播放，0表示暂停
+        'effect': effect,
+        'effectMode': soundEffects,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
         'type': 'initialState',
         'source': 'device',
         'rawData': data,
+        'rawBytes': data
+            .map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}')
+            .join(', '),
       };
 
-      print('解析设备状态: $newState');
-      
       // 将解析后的状态推送到流中，供控制页更新 UI
       if (!_deviceStateController.isClosed) {
         _deviceStateController.add(newState);
       }
-      
-      // 打印解析出的状态值
+      // 打印解析出的 sound effects 值
       print(
-        '✅ Full state parsed and updated. Volume: $volume, Effect: $effect3d, Effect Mode: $musicEQ, Mic Volume: $micVolume, Mic EQ: $micEQ, Is Playing: ${musicVB == 1}',
+        '✅ Full state parsed and updated. Sound Effects Value: $soundEffects',
       );
     } else {
       // 处理其他类型的指令
@@ -738,22 +767,22 @@ class AmpBluetoothService {
       );
       switch (command) {
         case 0x00: // Sync指令
-          _handleSyncCommand(data, 0); // 不再使用dataLength
+          _handleSyncCommand(data, dataLength);
           break;
         case 0x02: // 音效强度响应（新增）
-          _handleEffectResponse(data, 0); // 不再使用dataLength
+          _handleEffectResponse(data, dataLength);
           break;
         case 0x05: // 状态响应
-          _handleStateResponse(data, 0); // 不再使用dataLength
+          _handleStateResponse(data, dataLength);
           break;
         case 0x06: // 音量变化通知
-          _handleVolumeChange(data, 0); // 不再使用dataLength
+          _handleVolumeChange(data, dataLength);
           break;
         case 0x07: // 效果变化通知
-          _handleEffectChange(data, 0); // 不再使用dataLength
+          _handleEffectChange(data, dataLength);
           break;
         case 0x08: // 音效模式变化通知
-          _handleEffectModeChange(data, 0); // 不再使用dataLength
+          _handleEffectModeChange(data, dataLength);
           break;
         default:
           print('ℹ️ 收到未知指令类型: 0x${command.toRadixString(16)}');
@@ -768,40 +797,32 @@ class AmpBluetoothService {
     print('数据长度: ${data.length}');
 
     // 更宽松的长度检查
-    if (data.length < 9) {
-      print('⚠️ Sync指令数据长度不足，无法解析: ${data.length}');
-      return;
+    if (data.length < 6) {
+      print('⚠️ Sync指令数据长度不足，尝试解析: ${data.length}');
+      // 不返回，尝试解析可用数据
     }
 
     try {
-      // 直接按字段位置解析
-      int volume = data[2];
-      int musicVB = data[3];
-      int effect3d = data[4];
-      int musicEQ = data[5];
-      int micVolume = data[6];
-      int micEQ = data[7];
+      // 更健壮的数据提取
+      int volume = data.length > 3 ? data[3] : 0;
+      int effect = data.length > 4 ? data[4] : 0;
+      int soundEffect = data.length > 5 ? data[5] : 0;
 
       // 数据验证
       volume = volume.clamp(0, 32);
-      effect3d = effect3d.clamp(0, 32);
-      musicEQ = musicEQ.clamp(0, 8);
-      micVolume = micVolume.clamp(0, 32);
-      micEQ = micEQ.clamp(0, 8);
+      effect = effect.clamp(0, 32);
+      soundEffect = soundEffect.clamp(0, 8);
 
-      print('🔄 设备主动同步 - 音量: $volume, 3D效果: $effect3d, 音效模式: $musicEQ, 麦克风音量: $micVolume, 麦克风EQ: $micEQ, 播放状态: ${musicVB == 1 ? '播放' : '暂停'}');
+      print('🔄 设备主动同步 - 音量: $volume, 效果: $effect, 音效模式: $soundEffect');
 
       Map<String, dynamic> state = {
         'volume': volume,
-        'effect': effect3d,
-        'effectMode': musicEQ,
-        'micVolume': micVolume,
-        'micEQ': micEQ,
-        'isPlaying': musicVB == 1,
+        'effect': effect,
+        'effectMode': soundEffect,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
         'type': 'sync',
-        'source': 'device',
-        'rawData': data,
+        'source': 'device', // 标记来自设备
+        'rawData': data, // 添加原始数据
       };
 
       if (!_deviceStateController.isClosed) {
@@ -1268,110 +1289,6 @@ class AmpBluetoothService {
     return false;
   }
 
-  // 🚨 关键修复：添加备用连接策略方法
-
-  // 发送连接成功确认
-  Future<void> _sendConnectionSuccess() async {
-    try {
-      if (writeCharacteristic != null) {
-        // 发送连接成功确认指令
-        List<int> successCommand = [0xAA, 0x55, 0x01]; // 示例确认指令
-        await writeCharacteristic!.write(
-          successCommand,
-          withoutResponse: false,
-        );
-        print('✅ 发送连接成功确认');
-      }
-    } catch (e) {
-      print('⚠️ 发送连接成功确认失败: $e');
-    }
-  }
-
-  // 备用连接策略：使用第一个可用服务
-  Future<void> _tryFallbackConnection(List<BluetoothService> services) async {
-    try {
-      print('🔄 尝试备用连接策略...');
-
-      if (services.isNotEmpty) {
-        BluetoothService firstService = services.first;
-        print('使用第一个服务: ${firstService.uuid}');
-
-        // 尝试使用该服务的特征
-        for (BluetoothCharacteristic characteristic
-            in firstService.characteristics) {
-          if (characteristic.properties.write) {
-            writeCharacteristic = characteristic;
-            print('✅ 找到备用写入特征: ${characteristic.uuid}');
-          }
-
-          if (characteristic.properties.notify ||
-              characteristic.properties.indicate) {
-            readCharacteristic = characteristic;
-            print('✅ 找到备用通知特征: ${characteristic.uuid}');
-
-            // 启用通知
-            await _enableNotificationsWithRetry(characteristic);
-          }
-        }
-
-        if (writeCharacteristic != null) {
-          updateConnectionStatus(true);
-          _startConnectionCheckTimer();
-          print('✅ 备用连接策略成功');
-          return;
-        }
-      }
-
-      throw Exception('备用连接策略失败');
-    } catch (e) {
-      print('❌ 备用连接策略失败: $e');
-      updateConnectionStatus(false);
-      throw e;
-    }
-  }
-
-  // 尝试使用其他特征
-  Future<void> _tryAlternativeCharacteristics(
-    List<BluetoothService> services,
-  ) async {
-    try {
-      print('🔄 尝试使用其他特征...');
-
-      for (BluetoothService service in services) {
-        for (BluetoothCharacteristic characteristic
-            in service.characteristics) {
-          if (characteristic.properties.write && writeCharacteristic == null) {
-            writeCharacteristic = characteristic;
-            print('✅ 找到替代写入特征: ${characteristic.uuid}');
-          }
-
-          if ((characteristic.properties.notify ||
-                  characteristic.properties.indicate) &&
-              readCharacteristic == null) {
-            readCharacteristic = characteristic;
-            print('✅ 找到替代通知特征: ${characteristic.uuid}');
-
-            // 启用通知
-            await _enableNotificationsWithRetry(characteristic);
-          }
-        }
-      }
-
-      if (writeCharacteristic != null) {
-        updateConnectionStatus(true);
-        _startConnectionCheckTimer();
-        print('✅ 替代特征策略成功');
-        return;
-      }
-
-      throw Exception('替代特征策略失败');
-    } catch (e) {
-      print('❌ 替代特征策略失败: $e');
-      updateConnectionStatus(false);
-      throw e;
-    }
-  }
-
   // 启动蓝牙适配器状态监听
   void startAdapterStateListener() {
     _adapterStateSubscription?.cancel();
@@ -1413,5 +1330,29 @@ class AmpBluetoothService {
     } catch (e) {
       print('❌ 蓝牙重新开启后尝试连接时发生错误: $e');
     }
+  }
+
+  // 发送播放指令
+  Future<void> sendPlayCommand() async {
+    print('发送播放指令');
+    final List<int> command = [0xBE, 0x02, 0x00]; // 播放指令
+    await sendCommand(command);
+  }
+
+  // 发送暂停指令
+  Future<void> sendPauseCommand() async {
+    print('发送暂停指令');
+    final List<int> command = [0xBE, 0x02, 0x01]; // 暂停指令
+    await sendCommand(command);
+  }
+
+  // 发送XBass指令
+  Future<void> sendXBassCommand(int level) async {
+    if (level < 1 || level > 3) {
+      throw Exception('XBass level must be 1, 2, or 3');
+    }
+    print('发送XBass指令: level=$level');
+    final List<int> command = [0xBE, 0x03, level];
+    await sendCommand(command);
   }
 }

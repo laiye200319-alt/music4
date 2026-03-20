@@ -1012,11 +1012,9 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
     try {
       // 发送输入源选择指令到设备
       print('Selecting input source: $source');
-      // 这里需要根据实际蓝牙协议发送相应的指令
-      int sourceIndex = inputSources.indexOf(source);
-      if (sourceIndex != -1) {
-        await _bluetoothService.sendInputSourceCommand(sourceIndex);
-      }
+
+      // 使用安全的输入源切换序列（先回BT模式，再切目标模式）
+      await _bluetoothService.sendSafeInputSourceCommand(source);
 
       // 根据输入源切换UI逻辑
       if (source == 'FM') {
@@ -1899,8 +1897,8 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
         final serviceUuid = service.uuid.toString().toLowerCase();
         print('检查服务: $serviceUuid');
 
-        if (serviceUuid == '0000ab00-0000-1000-8000-00805f9b34fb' ||
-            serviceUuid.contains('ab00')) {
+        if (serviceUuid == '0000ae30-0000-1000-8000-00805f9b34fb' ||
+            serviceUuid.contains('ae30')) {
           foundService = true;
           print('✅ 找到目标服务: $serviceUuid');
 
@@ -1909,16 +1907,16 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
             final charUuid = characteristic.uuid.toString().toLowerCase();
             print('检查特征: $charUuid, 属性: ${characteristic.properties}');
 
-            if ((charUuid == '0000ab01-0000-1000-8000-00805f9b34fb' ||
-                    charUuid.contains('ab01')) &&
+            if ((charUuid == '0000ae01-0000-1000-8000-00805f9b34fb' ||
+                    charUuid.contains('ae01')) &&
                 characteristic.properties.write) {
               _bluetoothService.writeCharacteristic = characteristic;
               foundWriteChar = true;
               print('✅ 找到并设置写入特征: $charUuid');
             }
 
-            if ((charUuid == '0000ab02-0000-1000-8000-00805f9b34fb' ||
-                    charUuid.contains('ab02')) &&
+            if ((charUuid == '0000ae02-0000-1000-8000-00805f9b34fb' ||
+                    charUuid.contains('ae02')) &&
                 characteristic.properties.notify) {
               _bluetoothService.readCharacteristic = characteristic;
               foundReadChar = true;
@@ -3441,6 +3439,7 @@ class _BluetoothConnectionScreenState extends State<BluetoothConnectionScreen> {
       print('🚀 开始蓝牙扫描...');
       await FlutterBluePlus.startScan(
         timeout: const Duration(seconds: 15), // 延长扫描时间
+        withServices: [Guid('0000ae30-0000-1000-8000-00805f9b34fb')], // 精准过滤AE30服务
         androidScanMode: AndroidScanMode.lowLatency, // 低延迟模式
       );
 
