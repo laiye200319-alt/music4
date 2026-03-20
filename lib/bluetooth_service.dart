@@ -1373,4 +1373,18 @@ class AmpBluetoothService {
   Future<void> switchToFM() async {
     await sendInputSourceCommand('FM');
   }
+
+  // 发送上一首指令 - 使用0x31命令码
+  Future<void> sendPreviousTrackCommand() async {
+    print('发送上一首指令');
+    final List<int> command = [0xBE, 0x31, 0x00]; // 上一首指令
+    await sendCommand(command);
+  }
+
+  // 发送下一首指令 - 使用0x31命令码  
+  Future<void> sendNextTrackCommand() async {
+    print('发送下一首指令');
+    final List<int> command = [0xBE, 0x31, 0x02]; // 下一首指令
+    await sendCommand(command);
+  }
 }

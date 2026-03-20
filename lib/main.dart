@@ -1172,7 +1172,7 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
 
     try {
       print('Sending previous track command via Bluetooth');
-      // await _bluetoothService.sendPreviousTrackCommand();
+      await _bluetoothService.sendPreviousTrackCommand();
       _showSuccess('Previous track');
     } catch (e) {
       print('Failed to send previous track command: $e');
@@ -1210,13 +1210,14 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
 
     try {
       print('Sending next track command via Bluetooth');
-      // await _bluetoothService.sendNextTrackCommand();
+      await _bluetoothService.sendNextTrackCommand();
       _showSuccess('Next track');
     } catch (e) {
       print('Failed to send next track command: $e');
       _showError('Failed to go to next track');
     }
   }
+
 
   // 新增：X.BASS选择方法
   void _selectXBass(String xbass) async {
