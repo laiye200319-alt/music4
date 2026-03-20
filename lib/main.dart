@@ -1014,7 +1014,30 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
       print('Selecting input source: $source');
 
       // 使用安全的输入源切换序列（先回BT模式，再切目标模式）
-      await _bluetoothService.sendSafeInputSourceCommand(source);
+      if (source == 'BT') {
+        await _bluetoothService.switchToBT();
+      } else {
+        // 1. 首先切换到BT模式
+        await _bluetoothService.switchToBT();
+        
+        // 2. 等待短暂间隔
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        // 3. 再切换到目标模式
+        switch (source) {
+          case 'AUX':
+            await _bluetoothService.switchToAUX();
+            break;
+          case 'USB/SD':
+            await _bluetoothService.switchToUSB();
+            break;
+          case 'FM':
+            await _bluetoothService.switchToFM();
+            break;
+          default:
+            throw Exception('Invalid input source: $source');
+        }
+      }
 
       // 根据输入源切换UI逻辑
       if (source == 'FM') {
@@ -3439,7 +3462,6 @@ class _BluetoothConnectionScreenState extends State<BluetoothConnectionScreen> {
       print('🚀 开始蓝牙扫描...');
       await FlutterBluePlus.startScan(
         timeout: const Duration(seconds: 15), // 延长扫描时间
-        withServices: [Guid('0000ae30-0000-1000-8000-00805f9b34fb')], // 精准过滤AE30服务
         androidScanMode: AndroidScanMode.lowLatency, // 低延迟模式
       );
 

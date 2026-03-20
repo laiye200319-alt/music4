@@ -659,20 +659,32 @@ class AmpBluetoothService {
 
     if (targetSource == 'BT') {
       // 如果目标就是BT模式，直接切换
-      await sendInputSourceCommand('BT');
+      await switchToBT();
       return;
     }
 
     // 1. 首先切换到BT模式
     print('步骤1: 切换到BT模式');
-    await sendInputSourceCommand('BT');
+    await switchToBT();
     
     // 2. 等待短暂间隔
-    await Future.delayed(Duration(milliseconds: 100));
+    await Future.delayed(const Duration(milliseconds: 100));
     
     // 3. 再切换到目标模式
     print('步骤2: 切换到目标模式 $targetSource');
-    await sendInputSourceCommand(targetSource);
+    switch (targetSource) {
+      case 'AUX':
+        await switchToAUX();
+        break;
+      case 'USB/SD':
+        await switchToUSB();
+        break;
+      case 'FM':
+        await switchToFM();
+        break;
+      default:
+        throw Exception('Invalid input source: $targetSource');
+    }
     
     print('✅ 安全输入源切换完成');
   }
@@ -1004,36 +1016,11 @@ class AmpBluetoothService {
 
   // 获取真实的连接状态（详细检查）
   Future<bool> get isReallyConnected async {
-    if (connectedDevice == null) {
-      print('❌ No connected devices');
-      return false;
-    }
-
-    try {
-      // 检查设备物理连接状态
-      bool deviceConnected = await connectedDevice!.isConnected;
-      if (!deviceConnected) {
-        print('❌ The physical connection of the device has been disconnected');
-        return false;
-      }
-
-      // 检查写入特征是否可用
-      bool writeCharAvailable = writeCharacteristic != null;
-      if (!writeCharAvailable) {
-        print('❌ Write-in features not available');
-      }
-
-      // 只有设备连接且写入特征可用才认为是真正连接
-      bool reallyConnected = deviceConnected && writeCharAvailable;
-      print(
-        'True connection status: $reallyConnected (Device connection: $deviceConnected, Write features: $writeCharAvailable)',
-      );
-
-      return reallyConnected;
-    } catch (e) {
-      print('❌ Error checking the real connection status: $e');
-      return false;
-    }
+    // 简化检查：只要设备连接且特征存在就认为连接正常
+    bool connected = connectedDevice != null && 
+                    writeCharacteristic != null;
+    print('Simplified connection status: $connected');
+    return connected;
   }
 
   // 手动刷新连接状态
@@ -1066,25 +1053,35 @@ class AmpBluetoothService {
       for (BluetoothService service in services) {
         String serviceUuidLower = service.uuid.toString().toLowerCase();
 
-        if (serviceUuidLower.contains('ab00')) {
+        if (serviceUuidLower.contains('ae30')) {
           for (BluetoothCharacteristic characteristic
               in service.characteristics) {
             String charUuid = characteristic.uuid.toString().toLowerCase();
 
-            // 查找写入特征
-            if ((charUuid.contains('ab01') || charUuid.contains('ffe1')) &&
-                characteristic.properties.write) {
+            // 查找写入特征 - AE01
+            if (charUuid.contains('ae01') && 
+                (characteristic.properties.write || characteristic.properties.writeWithoutResponse)) {
               writeCharacteristic = characteristic;
               foundWriteChar = true;
-              print('✅ 重新找到写入特征');
+              print('✅ 重新找到写入特征: ${characteristic.uuid}');
+
+              // 启用写入特征的必要设置（如果需要）
+              if (characteristic.properties.indicate || characteristic.properties.notify) {
+                try {
+                  await characteristic.setNotifyValue(true);
+                  print('✅ 重新启用写入特征通知');
+                } catch (e) {
+                  print('⚠️ 重新启用写入特征通知失败: $e');
+                }
+              }
             }
 
-            // 查找读取特征
-            if ((charUuid.contains('ab02') || charUuid.contains('ffe2')) &&
+            // 查找读取特征 - AE02
+            if (charUuid.contains('ae02') &&
                 characteristic.properties.notify) {
               readCharacteristic = characteristic;
               foundReadChar = true;
-              print('✅ 重新找到读取特征');
+              print('✅ 重新找到读取特征: ${characteristic.uuid}');
 
               // 启用通知
               try {
@@ -1354,5 +1351,26 @@ class AmpBluetoothService {
     print('发送XBass指令: level=$level');
     final List<int> command = [0xBE, 0x03, level];
     await sendCommand(command);
+  }
+
+  // 新增：具体的输入源切换方法
+  /// 切换到BT模式 - 发送指令 [0xBE, 0x30, 0x00]
+  Future<void> switchToBT() async {
+    await sendInputSourceCommand('BT');
+  }
+
+  /// 切换到AUX模式 - 发送指令 [0xBE, 0x30, 0x01]
+  Future<void> switchToAUX() async {
+    await sendInputSourceCommand('AUX');
+  }
+
+  /// 切换到USB/SD模式 - 发送指令 [0xBE, 0x30, 0x02]
+  Future<void> switchToUSB() async {
+    await sendInputSourceCommand('USB/SD');
+  }
+
+  /// 切换到FM模式 - 发送指令 [0xBE, 0x30, 0x03]
+  Future<void> switchToFM() async {
+    await sendInputSourceCommand('FM');
   }
 }
