@@ -404,7 +404,7 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
     try {
       // 这里需要根据实际蓝牙协议发送FM频率指令
       print('Setting FM frequency to: ${frequency.toStringAsFixed(1)} MHz');
-      // await _bluetoothService.sendFMFrequencyCommand(frequency);
+      await _bluetoothService.sendFMFrequencyCommand(frequency);
 
       // 暂时使用提示
       _showSuccess('FM frequency set to ${frequency.toStringAsFixed(1)} MHz');
@@ -1013,6 +1013,12 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
       // 发送输入源选择指令到设备
       print('Selecting input source: $source');
 
+      // 【增强】确保设备已完全连接且写入特征可用
+      bool reallyConnected = await _bluetoothService.isReallyConnected;
+      if (!reallyConnected) {
+        throw Exception('设备未连接，请先连接设备');
+      }
+
       // 使用安全的输入源切换序列（先回BT模式，再切目标模式）
       if (source == 'BT') {
         await _bluetoothService.switchToBT();
@@ -1020,8 +1026,8 @@ class _AudioControllerScreenState extends State<AudioControllerScreen>
         // 1. 首先切换到BT模式
         await _bluetoothService.switchToBT();
         
-        // 2. 等待短暂间隔
-        await Future.delayed(const Duration(milliseconds: 100));
+        // 2. 等待足够的时间让设备处理BT模式切换
+        await Future.delayed(const Duration(milliseconds: 300));
         
         // 3. 再切换到目标模式
         switch (source) {

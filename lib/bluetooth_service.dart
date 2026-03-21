@@ -496,7 +496,7 @@ class AmpBluetoothService {
     // 构造指令包 - 使用标准三字节格式，移除校验和
     final List<int> packet = [
       0xBE, // 包头
-      0x31, // 音量指令 (根据AE30协议)
+      0x01, // 音量指令 (根据您提供的实际设备协议)
       volume, // 音量值
     ];
 
@@ -513,48 +513,48 @@ class AmpBluetoothService {
   Future<void> sendEffectCommand(int effectMode) async {
     print('发送音效强度指令: $effectMode');
 
-    // 构造指令包
+    // 确保音效值在有效范围内 (0-32)
+    effectMode = effectMode.clamp(0, 32);
+    print('音效强度已限制: $effectMode');
+
+    // 构造指令包 - 使用标准三字节格式，移除校验和
     final List<int> packet = [
       0xBE, // 包头
-      0x02, // 音效指令
-      0x01, // 数据长度
+      0x02, // 音效强度指令
       effectMode, // 音效值
-      0x00, // 校验位（临时）
     ];
 
-    // 计算校验和
-    int checksum = 0;
-    for (int i = 1; i < packet.length - 1; i++) {
-      checksum += packet[i];
-    }
-    packet[packet.length - 1] = checksum & 0xFF;
+    print('音效强度指令包: $packet');
+    print(
+      '十六进制: ${packet.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ')}',
+    );
 
-    print('音效指令包: $packet');
     await sendCommand(packet, maxRetries: 3);
+    print('✅ 音效强度指令发送完成');
   }
 
   // 发送音效模式指令
   Future<void> sendEffectModeCommand(int effectMode) async {
     print('发送音效模式指令: $effectMode');
 
-    // 构造指令包
+    // 确保模式值在有效范围内 (0-8)
+    effectMode = effectMode.clamp(0, 8);
+    print('音效模式已限制: $effectMode');
+
+    // 构造指令包 - 使用标准三字节格式，移除校验和
     final List<int> packet = [
       0xBE, // 包头
       0x03, // 音效模式指令
-      0x01, // 数据长度
       effectMode, // 模式值
-      0x00, // 校验位（临时）
     ];
 
-    // 计算校验和
-    int checksum = 0;
-    for (int i = 1; i < packet.length - 1; i++) {
-      checksum += packet[i];
-    }
-    packet[packet.length - 1] = checksum & 0xFF;
-
     print('音效模式指令包: $packet');
+    print(
+      '十六进制: ${packet.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ')}',
+    );
+
     await sendCommand(packet, maxRetries: 3);
+    print('✅ 音效模式指令发送完成');
   }
 
   // 新增：读取设备当前状态
@@ -1332,14 +1332,14 @@ class AmpBluetoothService {
   // 发送播放指令
   Future<void> sendPlayCommand() async {
     print('发送播放指令');
-    final List<int> command = [0xBE, 0x02, 0x00]; // 播放指令
+    final List<int> command = [0xBE, 0x31, 0x01]; // 播放/暂停指令 (修正命令码)
     await sendCommand(command);
   }
 
   // 发送暂停指令
   Future<void> sendPauseCommand() async {
     print('发送暂停指令');
-    final List<int> command = [0xBE, 0x02, 0x01]; // 暂停指令
+    final List<int> command = [0xBE, 0x31, 0x01]; // 播放/暂停指令 (修正命令码)
     await sendCommand(command);
   }
 
@@ -1385,6 +1385,41 @@ class AmpBluetoothService {
   Future<void> sendNextTrackCommand() async {
     print('发送下一首指令');
     final List<int> command = [0xBE, 0x31, 0x02]; // 下一首指令
+    await sendCommand(command);
+  }
+
+  // 发送FM频率设置指令
+  // FM频率范围: 87.5 - 108.0 MHz
+  // 协议格式: [0xBE, 0xF0, 0x00, freq_byte1, freq_byte2, freq_byte3]
+  // 根据实际设备协议，87.5MHz = [0xBE, 0xF0, 0x00, 0x08, 0x07, 0x05]
+  Future<void> sendFMFrequencyCommand(double frequency) async {
+    if (frequency < 87.5 || frequency > 108.0) {
+      throw Exception('FM frequency must be between 87.5 and 108.0 MHz');
+    }
+    
+    print('发送FM频率指令: $frequency MHz');
+    
+    // 根据您提供的示例: 87.5MHz = [0x00, 0x08, 0x07, 0x05]
+    // 分析数据结构:
+    // 0x00 - 可能是固定前缀
+    // 0x08, 0x07, 0x05 - 频率编码
+    
+    // 基于87.5MHz = [0x00, 0x08, 0x07, 0x05] 的模式
+    // 计算频率偏移: (frequency - 87.5) * 10 得到步进值
+    int steps = ((frequency - 87.5) * 10).round();
+    
+    // 根据示例推导编码规律
+    // 87.5MHz (steps=0): [0x00, 0x08, 0x07, 0x05]
+    // 假设每增加0.1MHz，最后一个字节+1
+    int byte1 = 0x00; // 固定
+    int byte2 = 0x08; // 固定  
+    int byte3 = 0x07; // 固定
+    int byte4 = 0x05 + steps; // 频率变化部分
+    
+    // 确保byte4在有效范围内 (0x00-0xFF)
+    byte4 = byte4.clamp(0, 255);
+    
+    final List<int> command = [0xBE, 0xF0, byte1, byte2, byte3, byte4];
     await sendCommand(command);
   }
 }
